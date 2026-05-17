@@ -13,6 +13,10 @@ VALGRIND_OPTS ?= --leak-check=full --show-leak-kinds=definite,indirect --errors-
 SRCS := $(wildcard $(SRC_DIR)/*.c) $(wildcard $(SRC_DIR)/adapters/*.c)
 LIB_SRCS := $(filter-out $(SRC_DIR)/test.c,$(SRCS))
 
+INCLUDES += -I$(HOME)/cfl-idr-with-la/include
+INCLUDES += -I$(HOME)/cfl-idr-with-la/vendor/uthash
+LDLIBS   += $(HOME)/cfl-idr-with-la/build/src/libcfl-idr-with-la.a
+
 .PHONY: all clean bench debug test-explode-indices test-explode-indices-leaks
 
 all: $(TARGET)
