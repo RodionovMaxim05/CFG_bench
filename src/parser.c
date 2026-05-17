@@ -3,17 +3,15 @@
 #include <LAGraphX.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-static int is_blank_line(const char *line) {
-    return line[strspn(line, " \t\r\n")] == '\0';
-}
+static int is_blank_line(const char *line) { return line[strspn(line, " \t\r\n")] == '\0'; }
 
 static int parse_size_token(const char *token, size_t *out) {
     char *end = NULL;
@@ -406,8 +404,8 @@ ParserResult parser(config_row config_i) {
     char *config_graph = strdup(config_i.graph);
     char *config_grammar = strdup(config_i.grammar);
 
+    Grammar _grammar = {0};
     RSM_Template template = RSM_NO_TEMPLATE;
-    rsm_template_from_string(config_grammar, &template);
 
     // printf("Reading graph file...");
     // char *graph_buf = read_entire_file(config_graph);
@@ -416,13 +414,21 @@ ParserResult parser(config_row config_i) {
 
     SymbolList list = symbol_list_create();
 
-    // printf("Process grammar...");
-    FILE *grammar_file = open_parser_file(config_grammar, "grammar");
-    Grammar _grammar = process_grammar(grammar_file, &list);
-    grammar_swap_symbols(&_grammar, 0, _grammar.start_nonterm);
-    symbol_list_swap(&list, 0, _grammar.start_nonterm);
-    _grammar.start_nonterm = 0;
-    // printf("OK\n");
+    bool has_grammar = strcmp(config_grammar, "none") != 0;
+
+    if (has_grammar) {
+        rsm_template_from_string(config_grammar, &template);
+
+        // printf("Process grammar...");
+        FILE *grammar_file = open_parser_file(config_grammar, "grammar");
+        Grammar _grammar = process_grammar(grammar_file, &list);
+        grammar_swap_symbols(&_grammar, 0, _grammar.start_nonterm);
+        symbol_list_swap(&list, 0, _grammar.start_nonterm);
+        _grammar.start_nonterm = 0;
+        // printf("OK\n");
+
+        fclose(grammar_file);
+    }
 
     // printf("Process graph...");
     FILE *graph_file = open_parser_file(config_graph, "graph");
@@ -440,7 +446,6 @@ ParserResult parser(config_row config_i) {
 #endif
 
     fclose(graph_file);
-    fclose(grammar_file);
     free(config_grammar);
     free(config_graph);
 
@@ -470,13 +475,15 @@ void get_configs_from_file(char *path, size_t *configs_count, config_row *config
         char *graph = strtok(line, ",");
         char *grammar = strtok(NULL, ",");
         char *valid_result_str = strtok(NULL, ",");
+        char *idr_grammar_str = strtok(NULL, ",");
 
         if (graph == NULL || grammar == NULL || valid_result_str == NULL)
             break;
 
         size_t valid_result = atoi(valid_result_str);
 
-        configs[(*configs_count)++] = (config_row){.grammar = grammar, .graph = graph, .valid_result = valid_result};
+        configs[(*configs_count)++] = (config_row){
+            .grammar = grammar, .graph = graph, .valid_result = valid_result, .idr_grammar = idr_grammar_str};
         line = end + 1;
     }
 }

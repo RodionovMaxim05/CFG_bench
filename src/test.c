@@ -2,9 +2,10 @@
 #include "adapter_CFL_CFPQ_RSM.h"
 #include "adapter_CFL_adv.h"
 #include "adapter_CFL_all_path.h"
+#include "adapter_CFL_all_path_adv.h"
+#include "adapter_CFL_idr.h"
 #include "adapter_CFL_multsrc.h"
 #include "adapter_CFL_single_path.h"
-#include "adapter_CFL_all_path_adv.h"
 #include "memory.h"
 #include "parser.h"
 #include "result_manager.h"
@@ -99,7 +100,18 @@ void print_list(SymbolList list, size_t *map) {
 #define OPT_LAZY (1 << 2)
 #define OPT_BLOCK (1 << 3)
 
-enum { HOT_OPTION = 1000 };
+enum { HOT_OPTION = 1000, FULL_TIME_OPTION };
+
+typedef struct {
+    AdapterMethods adapter;
+    char *algo;
+    char *input_config;
+    size_t rounds_count;
+    bool is_test;
+    bool is_hot_enabled;
+    int8_t optimizations;
+    IdrPrepareData idr_opts;
+} BenchArgs;
 
 static void print_usage(const char *program_name) {
     fprintf(stderr,
@@ -111,8 +123,10 @@ static void print_usage(const char *program_name) {
             "Benchmark options:\n"
             "  -r <rounds>       Number of benchmark rounds (default: 10)\n"
             "  --hot             Enable HOT launch (warm-up run before measurements)\n"
+            "  --full-time       Measure full time including parsing and prepare\n"
             "  -a <algorithm>    Algorithm to use "
-            "(default: CFL_adv; options: CFL_adv, CFL, CFL_single_path, CFL_all_path, CFL_all_path_adv, CFL_CFPQ_RSM, CFL_multsrc)\n"
+            "(default: CFL_adv; options: CFL_adv, CFL, CFL_single_path, CFL_all_path, CFL_all_path_adv, CFL_CFPQ_RSM, "
+            "CFL_multsrc, CFL_idr)\n"
             "\n"
             "Optimization flags:\n"
             "  -e                Enable empty optimization\n"
@@ -129,52 +143,263 @@ static void print_usage(const char *program_name) {
             program_name, program_name);
 }
 
-int main(int argc, char **argv) {
+static void resolve_prepare_data(const BenchArgs *args, void **prepare_data, CFL_adv_PrepareData *cfl_adv_data) {
+    if (strcmp(args->algo, "CFL_idr") == 0) {
+        *prepare_data = (void *)&args->idr_opts;
+    } else {
+        cfl_adv_data->optimizations = args->optimizations;
+        *prepare_data = cfl_adv_data;
+    }
+}
+
+static void resolve_idr_opts(IdrPrepareData *idr_opts, const char *algo, config_row config) {
+    if (strcmp(algo, "CFL_idr") != 0 || config.idr_grammar == NULL) {
+        return;
+    }
+
+    idr_opts->parity_d = false;
+    idr_opts->on_demand = false;
+
+    if (strcmp(config.idr_grammar, "parity") == 0)
+        idr_opts->grammar_type = IDR_PARITY;
+    else if (strcmp(config.idr_grammar, "parity2") == 0)
+        idr_opts->grammar_type = IDR_PARITY2;
+    else if (strcmp(config.idr_grammar, "se") == 0)
+        idr_opts->grammar_type = IDR_SE;
+    else if (strcmp(config.idr_grammar, "project") == 0)
+        idr_opts->grammar_type = IDR_PROJECT;
+    else if (strcmp(config.idr_grammar, "exclude") == 0)
+        idr_opts->grammar_type = IDR_EXCLUDE;
+    else if (strcmp(config.idr_grammar, "all") == 0)
+        idr_opts->grammar_type = IDR_ALL;
+    else if (strcmp(config.idr_grammar, "parityD") == 0) {
+        idr_opts->grammar_type = IDR_PARITY;
+        idr_opts->parity_d = true;
+    } else if (strcmp(config.idr_grammar, "on-demand") == 0) {
+        idr_opts->grammar_type = IDR_ALL;
+        idr_opts->on_demand = true;
+    } else {
+        fprintf(stderr, "Unknown idr grammar: %s\n", config.idr_grammar);
+        exit(EXIT_FAILURE);
+    }
+}
+
+static void print_test_result(size_t result, GrB_Info retval, config_row config, AdapterMethods adapter,
+                              double elapsed) {
+    ResultType result_type = adapter.is_result_valid(config.valid_result);
+    char status[256];
+    switch (result_type) {
+    case RESULT_OK:
+        snprintf(status, sizeof(status), GREEN "[OK]" RESET);
+        break;
+    case RESULT_ERROR:
+        snprintf(status, sizeof(status), RED "[Wrong] (Result must be %ld)" RESET, config.valid_result);
+        break;
+    case RESULT_UNKNOWN:
+        snprintf(status, sizeof(status), YELLOW "[Unknown]" RESET);
+        break;
+    default:
+        fprintf(stderr, "Unknown result type: %d\n", result_type);
+        abort();
+    }
+    printf("\tResult: %ld (Return code: %d) %s (%.4f sec)", result, retval, status, elapsed);
+}
+
+typedef enum { BENCH_ALGO_ONLY, BENCH_FULL_TIME } BenchMode;
+
+static GrB_Info bench(BenchArgs *args, config_row *configs, size_t configs_count, BenchMode mode) {
     GrB_Info retval = GrB_SUCCESS;
-    int8_t optimizations = 0;
+
+    double setup_time = LAGraph_WallClockTime();
+    TRY(args->adapter.setup());
+    setup_time = LAGraph_WallClockTime() - setup_time;
+
+    for (size_t i = 0; i < configs_count; i++) {
+        double *elapsed = calloc(args->rounds_count, sizeof(double));
+        ssize_t *memory_kb = calloc(args->rounds_count, sizeof(ssize_t));
+        if (!elapsed || !memory_kb) {
+            free(elapsed);
+            free(memory_kb);
+            return GrB_OUT_OF_MEMORY;
+        }
+
+        config_row config = configs[i];
+        printf("CONFIG: grammar: %s, graph: %s\n", config.idr_grammar ? config.idr_grammar : config.grammar,
+               config.graph);
+        fflush(stdout);
+
+        resolve_idr_opts(&args->idr_opts, args->algo, config);
+
+        void *prepare_data = NULL;
+        CFL_adv_PrepareData cfl_adv_data = {0};
+        resolve_prepare_data(args, &prepare_data, &cfl_adv_data);
+
+        // In algo-only mode, parse once before the loop
+        ParserResult parser_result_outer = {0};
+        if (mode == BENCH_ALGO_ONLY) {
+            parser_result_outer = parser(config);
+            args->adapter.prepare(parser_result_outer, prepare_data);
+        }
+
+        bool is_hot = args->is_hot_enabled;
+
+        size_t result = 0;
+        for (size_t j = 0; j < args->rounds_count; j++) {
+            if (mode == BENCH_ALGO_ONLY) {
+                TRY(args->adapter.init_outputs());
+            }
+
+            // in some cases free don't change memory usage, so we need to reset it manually
+            malloc_trim(0);
+            if (mem_peak_reset() != 0) {
+                fprintf(stderr, "Failed to reset memory peak\n");
+                exit(EXIT_FAILURE);
+            }
+
+            double t_start = LAGraph_WallClockTime();
+
+            if (mode == BENCH_FULL_TIME) {
+                ParserResult pr = parser(config);
+                args->adapter.prepare(pr, prepare_data);
+                TRY(args->adapter.init_outputs());
+            }
+
+#ifndef CI
+            retval = args->adapter.run();
+#endif
+            double t_end = LAGraph_WallClockTime();
+            memory_kb[j] = mem_get_peak_kb();
+
+            double round_time = (t_end - t_start);
+            if (mode == BENCH_FULL_TIME) {
+                round_time += setup_time;
+            }
+            elapsed[j] = round_time;
+
+            if (args->is_test) {
+                result = args->adapter.get_result();
+                print_test_result(result, retval, config, args->adapter, round_time);
+                if (retval != 0) {
+                    printf("\t(MSG: %s)", msg);
+                }
+                printf("\n");
+
+                TRY(args->adapter.free_outputs());
+                if (mode == BENCH_FULL_TIME) {
+                    args->adapter.cleanup();
+                }
+                break;
+            }
+
+            if (is_hot) {
+                is_hot = false;
+                j--;
+                TRY(args->adapter.free_outputs());
+                if (mode == BENCH_FULL_TIME) {
+                    args->adapter.cleanup();
+                }
+                continue;
+            }
+
+            printf("\t%.3fs", round_time);
+            fflush(stdout);
+
+            result = args->adapter.get_result();
+            TRY(args->adapter.free_outputs());
+
+            if (mode == BENCH_FULL_TIME) {
+                args->adapter.cleanup();
+            }
+
+            save_result(args->algo, config.grammar, config.graph, result, memory_kb[j], (size_t)(round_time * 1000));
+            // in some cases free don't change memory usage, so we need to reset it manually
+            malloc_trim(0);
+        }
+        printf("\n");
+
+        if (mode == BENCH_ALGO_ONLY && !args->is_test) {
+            TRY(args->adapter.cleanup());
+        }
+
+        if (!args->is_test) {
+            double sum = 0;
+            ssize_t max_mem = 0;
+            for (size_t j = 0; j < args->rounds_count; j++) {
+                sum += elapsed[j];
+                if (memory_kb[j] > max_mem) {
+                    max_mem = memory_kb[j];
+                }
+            }
+            printf("\tTime elapsed (avg): %.6f seconds. %zd KB max memory. "
+                   "Result: %ld (return code %d) (%s)\n\n",
+                   sum / args->rounds_count, max_mem, result, retval, msg);
+        }
+
+        free(elapsed);
+        free(memory_kb);
+        fflush(stdout);
+    }
+
+    return GrB_SUCCESS;
+}
+
+int main(int argc, char **argv) {
     int opt;
-    bool is_test = false;
-    bool is_hot_enabled = false;
     bool is_config = false;
-    char *algo = NULL;
     bool is_algo_chosen = false;
+    bool is_full_time = false;
     char *input_config = NULL;
-    size_t rounds_count = 10;
 
-    AdapterMethods adapter = {0};
+    BenchArgs args = {
+        .rounds_count = 10,
+        .is_test = false,
+        .is_hot_enabled = false,
+        .optimizations = 0,
+        .idr_opts =
+            {
+                .valueflow = false,
+                .on_demand = false,
+                .parity_d = false,
+                .grammar_type = IDR_DEFAULT,
+            },
+    };
 
-    static struct option long_options[] = {{"hot", no_argument, 0, HOT_OPTION}, {0, 0, 0, 0}};
+    static struct option long_options[] = {
+        {"hot", no_argument, 0, HOT_OPTION}, {"full-time", no_argument, 0, FULL_TIME_OPTION}, {0, 0, 0, 0}};
 
     while ((opt = getopt_long(argc, argv, "eflbthr:c:a:", long_options, NULL)) != -1) {
         switch (opt) {
         case 'e':
-            optimizations |= OPT_EMPTY;
+            args.optimizations |= OPT_EMPTY;
             break;
         case 'f':
-            optimizations |= OPT_FORMAT;
+            args.optimizations |= OPT_FORMAT;
             break;
         case 'l':
-            optimizations |= OPT_LAZY;
+            args.optimizations |= OPT_LAZY;
             break;
         case 'b':
-            optimizations |= OPT_BLOCK;
+            args.optimizations |= OPT_BLOCK;
             break;
         case 'h':
             print_usage(argv[0]);
             exit(EXIT_SUCCESS);
         case HOT_OPTION:
-            is_hot_enabled = true;
+            args.is_hot_enabled = true;
+            break;
+        case FULL_TIME_OPTION:
+            is_full_time = true;
             break;
         case 't':
-            is_test = true;
+            args.is_test = true;
             break;
         case 'r':
-            rounds_count = strtoul(optarg, NULL, 10);
-            if (rounds_count == 0) {
+            args.rounds_count = strtoul(optarg, NULL, 10);
+            if (args.rounds_count == 0) {
                 fprintf(stderr, "Rounds count must be greater than 0\n");
                 exit(EXIT_FAILURE);
             }
-            printf("Choosen rounds count: %zu\n", rounds_count);
+            printf("Choosen rounds count: %zu\n", args.rounds_count);
             break;
         case 'c':
             is_config = true;
@@ -183,25 +408,27 @@ int main(int argc, char **argv) {
             break;
         case 'a':
             is_algo_chosen = true;
-            algo = optarg;
-            printf("Choosen algorithm: %s\n", algo);
+            args.algo = optarg;
+            printf("Choosen algorithm: %s\n", args.algo);
 
-            if (strcmp(algo, "CFL_adv") == 0) {
-                adapter = adapter_CFL_adv_get_methods();
-            } else if (strcmp(algo, "CFL") == 0) {
-                adapter = adapter_CFL_get_methods();
-            } else if (strcmp(algo, "CFL_single_path") == 0) {
-                adapter = adapter_CFL_single_path_get_methods();
-            } else if (strcmp(algo, "CFL_all_path") == 0) {
-                adapter = adapter_CFL_all_paths_get_methods();
-            } else if (strcmp(algo, "CFL_CFPQ_RSM") == 0) {
-                adapter = adapter_CFL_CFPQ_RSM_get_methods();
-            } else if (strcmp(algo, "CFL_multsrc") == 0) {
-                adapter = adapter_CFL_multsrc_get_methods();
-            } else if (strcmp(algo, "CFL_all_path_adv") == 0) {
-                adapter = adapter_CFL_all_path_adv_get_methods();
-            } else {
-                fprintf(stderr, "Unknown algorithm: %s\n", algo);
+            if (strcmp(args.algo, "CFL_adv") == 0)
+                args.adapter = adapter_CFL_adv_get_methods();
+            else if (strcmp(args.algo, "CFL") == 0)
+                args.adapter = adapter_CFL_get_methods();
+            else if (strcmp(args.algo, "CFL_single_path") == 0)
+                args.adapter = adapter_CFL_single_path_get_methods();
+            else if (strcmp(args.algo, "CFL_all_path") == 0)
+                args.adapter = adapter_CFL_all_paths_get_methods();
+            else if (strcmp(args.algo, "CFL_CFPQ_RSM") == 0)
+                args.adapter = adapter_CFL_CFPQ_RSM_get_methods();
+            else if (strcmp(args.algo, "CFL_multsrc") == 0)
+                args.adapter = adapter_CFL_multsrc_get_methods();
+            else if (strcmp(args.algo, "CFL_all_path_adv") == 0)
+                args.adapter = adapter_CFL_all_path_adv_get_methods();
+            else if (strcmp(args.algo, "CFL_idr") == 0)
+                args.adapter = adapter_CFL_idr_get_methods();
+            else {
+                fprintf(stderr, "Unknown algorithm: %s\n", args.algo);
                 exit(EXIT_FAILURE);
             }
             break;
@@ -212,12 +439,10 @@ int main(int argc, char **argv) {
     }
 
     if (!is_algo_chosen) {
-        adapter = adapter_CFL_adv_get_methods();
-        algo = "CFL_adv";
+        args.adapter = adapter_CFL_adv_get_methods();
+        args.algo = "CFL_adv";
         printf("No algorithm chosen, using CFL_adv by default\n");
     }
-
-    TRY(adapter.setup());
 
     if (!is_config) {
         fprintf(stderr, "Need to choose config by flag -c [config file]\n");
@@ -229,123 +454,13 @@ int main(int argc, char **argv) {
     char *config_text;
     get_configs_from_file(input_config, &configs_count, configs, &config_text);
 
-    printf("Start bench\n");
+    printf("Start bench (%s)\n", is_full_time ? "full-time mode" : "algorithm-only mode");
     fflush(stdout);
 
-    for (size_t i = 0; i < configs_count; i++) {
-        double *start = calloc(rounds_count, sizeof(double));
-        double *end = calloc(rounds_count, sizeof(double));
-        if (start == NULL || end == NULL) {
-            fprintf(stderr, "Failed to allocate memory for benchmark rounds\n");
-            free(start);
-            free(end);
-            exit(EXIT_FAILURE);
-        }
-
-        config_row config = configs[i];
-        printf("CONFIG: grammar: %s, graph: %s\n", config.grammar, config.graph);
-        fflush(stdout);
-
-        ParserResult parser_result = parser(config);
-        adapter.prepare(parser_result, &(CFL_adv_PrepareData){.optimizations = optimizations});
-
-        bool is_hot = is_hot_enabled;
-
-        size_t result = 0;
-        ssize_t max_memory_kb = 0;
-        for (size_t i = 0; i < rounds_count; i++) {
-            TRY(adapter.init_outputs());
-
-            // in some cases free don't change memory usage, so we need to reset it manually
-            malloc_trim(0);
-            if (mem_peak_reset() != 0) {
-                fprintf(stderr, "Failed to reset memory peak\n");
-                exit(EXIT_FAILURE);
-            }
-
-            start[i] = LAGraph_WallClockTime();
-#ifndef CI
-            retval = adapter.run();
-#endif
-            end[i] = LAGraph_WallClockTime();
-            max_memory_kb = mem_get_peak_kb();
-
-            if (is_test) {
-                size_t result = adapter.get_result();
-                ResultType result_type = adapter.is_result_valid(config.valid_result);
-                char status[256];
-                switch (result_type) {
-                case RESULT_OK:
-                    snprintf(status, sizeof(status), GREEN "[OK]" RESET);
-                    break;
-                case RESULT_ERROR:
-                    snprintf(status, sizeof(status), RED "[Wrong] (Result must be %ld)" RESET, config.valid_result);
-                    break;
-                case RESULT_UNKNOWN:
-                    snprintf(status, sizeof(status), YELLOW "[Unknown]" RESET);
-                    break;
-                default:
-                    fprintf(stderr, "Unknown result type: %d\n", result_type);
-                    abort();
-                }
-
-                printf("\tResult: %ld (Return code: %d) %s", result, retval, status);
-
-                if (retval != 0) {
-                    printf("\t(MSG: %s)", msg);
-                }
-                printf(" (%.4f sec)", end[i] - start[i]);
-
-                TRY(adapter.free_outputs());
-                break;
-            }
-
-            if (is_hot) {
-                is_hot = false;
-                i--;
-                TRY(adapter.free_outputs());
-                continue;
-            }
-
-            printf("\t%.3fs", end[i] - start[i]);
-            fflush(stdout);
-
-            result = adapter.get_result();
-            TRY(adapter.free_outputs());
-            save_result(algo, config.grammar, config.graph, result, max_memory_kb,
-                        (size_t)((end[i] - start[i]) * 1000));
-            // in some cases free don't change memory usage, so we need to reset it manually
-            malloc_trim(0);
-        }
-        printf("\n");
-
-        if (is_test) {
-            free(start);
-            free(end);
-            adapter.cleanup();
-
-            fflush(stdout);
-            continue;
-        }
-
-        double sum = 0;
-        for (size_t i = 0; i < rounds_count; i++) {
-            sum += end[i] - start[i];
-        }
-        printf("\tTime elapsed (avg): %.6f seconds. %zd KB max memory. Result: %ld (return code "
-               "%d) (%s)\n\n",
-               sum / rounds_count, max_memory_kb, result, retval, msg);
-
-        free(start);
-        free(end);
-
-        TRY(adapter.cleanup());
-
-        fflush(stdout);
-    }
+    GrB_Info retval = bench(&args, configs, configs_count, is_full_time ? BENCH_FULL_TIME : BENCH_ALGO_ONLY);
 
     free(configs);
     free(config_text);
-    TRY(adapter.teardown());
-    return 0;
+    TRY(args.adapter.teardown());
+    return retval == GrB_SUCCESS ? EXIT_SUCCESS : EXIT_FAILURE;
 }

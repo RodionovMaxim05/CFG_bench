@@ -104,6 +104,7 @@ typedef struct {
     char *grammar;
     char *graph;
     size_t valid_result;
+    char *idr_grammar;
 } config_row;
 
 // parse graph via "graph_file" desctriptor
