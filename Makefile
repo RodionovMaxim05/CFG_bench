@@ -6,7 +6,7 @@ TARGET := $(BUILD_DIR)/cfg_bench
 
 CFLAGS ?= -O2 -Wall -Wextra -Wpedantic -Wno-sign-compare
 INCLUDES := -I/usr/local/include/suitesparse -I$(SRC_DIR) -I$(SRC_DIR)/adapters
-LDLIBS := -lgraphblas -llagraph -llagraphx
+LDLIBS := -lgraphblas -llagraph -llagraphx -lm
 VALGRIND ?= valgrind
 VALGRIND_OPTS ?= --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=1
 
