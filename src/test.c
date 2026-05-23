@@ -9,6 +9,7 @@
 #include "memory.h"
 #include "parser.h"
 #include "result_manager.h"
+#include "stats.h"
 #include <GraphBLAS.h>
 #include <LAGraph.h>
 #include <LAGraphX.h>
@@ -301,7 +302,7 @@ static GrB_Info bench(BenchArgs *args, config_row *configs, size_t configs_count
                 continue;
             }
 
-            printf("\t%.3fs", round_time);
+            printf("\t%.3f s %.3f MB\n", round_time, (double)memory_kb[j] / 1024);
             fflush(stdout);
 
             result = args->adapter.get_result();
@@ -322,17 +323,25 @@ static GrB_Info bench(BenchArgs *args, config_row *configs, size_t configs_count
         }
 
         if (!args->is_test) {
-            double sum = 0;
-            ssize_t max_mem = 0;
-            for (size_t j = 0; j < args->rounds_count; j++) {
-                sum += elapsed[j];
-                if (memory_kb[j] > max_mem) {
-                    max_mem = memory_kb[j];
-                }
+            StatResult time_stats = calc_stats(elapsed, args->rounds_count);
+
+            double *memory_mb = malloc(args->rounds_count * sizeof(double));
+            if (!memory_mb) {
+                fprintf(stderr, "Failed to allocate memory for stats\n");
+                free(elapsed);
+                free(memory_kb);
+                return GrB_OUT_OF_MEMORY;
             }
-            printf("\tTime elapsed (avg): %.6f seconds. %zd KB max memory. "
+            for (size_t j = 0; j < args->rounds_count; j++) {
+                memory_mb[j] = (double)(memory_kb[j]) / 1024;
+            }
+            StatResult mem_stats = calc_stats(memory_mb, args->rounds_count);
+            free(memory_mb);
+
+            printf("\tTime: %.6f ± %.6f s "
+                   "Memory: %.3f ± %.3f MB "
                    "Result: %ld (return code %d) (%s)\n\n",
-                   sum / args->rounds_count, max_mem, result, retval, msg);
+                   time_stats.mean, time_stats.error, mem_stats.mean, mem_stats.error, result, retval, msg);
         }
 
         free(elapsed);
