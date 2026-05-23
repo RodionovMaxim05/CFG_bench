@@ -26,6 +26,7 @@ static state_t state;
 
 static GrB_Info build_idr_graph_from_parser(IdrGraph *out, ParserResult pr) {
     GraphMatrices gm = get_grb_matrices_from_graph(pr.graph, &pr.symbols);
+    free(pr.graph.edges);
 
     GrB_Info info = get_idr_graph(out, &gm, &pr.symbols, pr.node_count, &DefaultTerminalFormat);
 
@@ -38,6 +39,7 @@ static GrB_Info build_idr_graph_from_parser(IdrGraph *out, ParserResult pr) {
         free((void *)gm.matrices);
     }
     free(gm.matrix_symbols);
+    symbol_list_free(&pr.symbols);
 
     return info;
 }
