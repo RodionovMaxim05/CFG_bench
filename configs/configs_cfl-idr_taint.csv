@@ -54,10 +54,10 @@ data/graphs/cfl-idr_taint/roidsec.g,none,16362,exclude
 data/graphs/cfl-idr_taint/uranai.g,none,143,exclude
 data/graphs/cfl-idr_taint/zertsecurity.g,none,1080,exclude
 data/graphs/cfl-idr_taint/backflash.g,none,2625,parityD
-data/graphs/cfl-idr_taint/batterydoc.g,none,3447,parityD
-data/graphs/cfl-idr_taint/droidkongfu.g,none,3938,parityD
+data/graphs/cfl-idr_taint/batterydoc.g,none,3428,parityD
+data/graphs/cfl-idr_taint/droidkongfu.g,none,3873,parityD
 data/graphs/cfl-idr_taint/fakebanker.g,none,254,parityD
-data/graphs/cfl-idr_taint/fakedaum.g,none,2362,parityD
+data/graphs/cfl-idr_taint/fakedaum.g,none,2327,parityD
 data/graphs/cfl-idr_taint/faketaobao.g,none,61,parityD
 data/graphs/cfl-idr_taint/jollyserv.g,none,164,parityD
 data/graphs/cfl-idr_taint/loozfon.g,none,93,parityD

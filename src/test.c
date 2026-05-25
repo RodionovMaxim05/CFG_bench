@@ -17,6 +17,7 @@
 #include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #define run_algorithm()                                                                                                \
@@ -246,6 +247,13 @@ static GrB_Info bench(BenchArgs *args, config_row *configs, size_t configs_count
 
         size_t result = 0;
         for (size_t j = 0; j < args->rounds_count; j++) {
+            time_t now = time(NULL);
+            struct tm *tm_info = localtime(&now);
+            char time_buf[32];
+            strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
+            printf("\t[START %s] Round %zu/%zu: ", time_buf, j + 1, args->rounds_count);
+            fflush(stdout);
+
             if (mode == BENCH_ALGO_ONLY) {
                 TRY(args->adapter.init_outputs());
             }
