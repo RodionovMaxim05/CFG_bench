@@ -13,7 +13,8 @@ Required:
 Benchmark options:
   -r <rounds>       Number of benchmark rounds (default: 10)
   --hot             Enable HOT launch (warm-up run before measurements)
-  -a <algorithm>    Algorithm to use (default: CFL_adv; options: CFL_adv, CFL, CFL_single_path, CFL_all_path, CFL_CFPQ_RSM, CFL_multsrc)
+  --full-time       Measure full run time (initialization, parsing, and the algorithm itself)
+  -a <algorithm>    Algorithm to use (default: CFL_adv; options: CFL_adv, CFL, CFL_single_path, CFL_all_path, CFL_CFPQ_RSM, CFL_multsrc, CFL_idr)
 
 Optimization flags:
   -e                Enable empty optimization
@@ -32,6 +33,7 @@ Example:
 ## Usage
 
 1. Install **GraphBLAS**:
+
     ```bash
     git clone https://github.com/DrTimothyAldenDavis/GraphBLAS.git
     cd GraphBLAS
@@ -39,7 +41,9 @@ Example:
     sudo make install
     cd ..
     ```
+
 2. Install **LAGraph** from the benchmark branch:
+
     ```bash
     git clone https://github.com/SparseLinearAlgebra/LAGraph.git
     cd LAGraph
@@ -48,7 +52,9 @@ Example:
     sudo make install
     cd ..
     ```
+
 3. Start the benchmark:
+
     ```bash
     git clone https://github.com/homka122/CFG_bench.git
     cd CFG_bench
@@ -57,10 +63,13 @@ Example:
     make
     ./build/cfg_bench -c configs/configs_my.csv -r 10 --hot
     ```
+
     If `gdown` hangs or fails to download the archive, use the direct Google Drive link instead:
+
     ```bash
     curl -L "https://drive.usercontent.google.com/download?id=12Qhc6XNXYbpPbZGp-lo30NsywFELAFhu&export=download&confirm=t" -o CFPQ_eval.zip
     ```
+
     After unpacking, the benchmark data will be available in the `data` folder.
     Run `./build/cfg_bench -h` to print the CLI help message with descriptions of all available options.
 4. _(Optional)_ To use different graphs and grammars, upload the required files to the `data` folder.
