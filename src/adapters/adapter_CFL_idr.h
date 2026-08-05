@@ -1,7 +1,7 @@
 #pragma once
 
 #include "adapter.h"
-#include "cfl_idr_bench.h"
+#include "cfl_idr_graph_builder.h"
 
 typedef struct IdrPrepareData {
     bool valueflow;
