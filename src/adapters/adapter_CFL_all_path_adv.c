@@ -17,7 +17,6 @@
 // inner state of the adapter
 typedef struct {
     GrB_Type all_path_type;
-    BinaryRuleInfo *rule_table;
     GrB_Matrix *adj_matrices;
     GrB_Matrix *outputs;
     LAGraph_rule_EWCNF *rules;
@@ -130,7 +129,6 @@ static GrB_Info adapter_CFL_all_path_adv_prepare(ParserResult parser_result, voi
     }
     free(map);
 
-    state.rule_table = NULL;
     state.adj_matrices = matrices;
     state.rules = rules_EWCNF;
     state.rules_count = grammar.rules_count;
@@ -160,8 +158,8 @@ static GrB_Info adapter_CFL_all_path_adv_init_outputs() {
 //
 // this should be called after adapter_CFL_all_path_adv_init_outputs
 static GrB_Info adapter_CFL_all_path_adv_run() {
-    TRY(LAGraph_CFL_AllPaths_adv(state.outputs, &state.all_path_type, &state.rule_table, state.adj_matrices,
-                                 state.symbols_amount, state.rules, state.rules_count, state.msg, state.optimizations));
+    TRY(LAGraph_CFL_AllPaths_adv(state.outputs, &state.all_path_type, state.adj_matrices, state.symbols_amount,
+                                 state.rules, state.rules_count, state.msg, state.optimizations));
 
     return GrB_SUCCESS;
 }
@@ -200,8 +198,6 @@ static GrB_Info adapter_CFL_all_path_adv_free_outputs() {
 // this should be called after all runs of the algorithm for the given config
 static GrB_Info adapter_CFL_all_path_adv_cleanup() {
     TRY(adapter_CFL_cleanup_common(&state.adj_matrices, state.symbols_amount, (void **)&state.rules));
-    free(state.rule_table);
-    state.rule_table = NULL;
 
     return GrB_SUCCESS;
 }

@@ -19,7 +19,6 @@
 // inner state of the adapter
 typedef struct {
     GrB_Type all_path_type;
-    BinaryRuleInfo *rule_table;
     GrB_Matrix *adj_matrices;
     GrB_Matrix *outputs;
     LAGraph_rule_WCNF *rules;
@@ -65,8 +64,8 @@ static GrB_Info adapter_CFL_init_outputs(void) {
 //
 // this should be called after adapter_CFL_adv_init_outputs
 static GrB_Info adapter_CFL_run(void) {
-    TRY(LAGraph_CFL_AllPaths(state.outputs, &state.all_path_type, &state.rule_table, state.adj_matrices,
-                             state.terms_count, state.nonterms_count, state.rules, state.rules_count, state.msg, 0));
+    TRY(LAGraph_CFL_AllPaths(state.outputs, &state.all_path_type, state.adj_matrices, state.terms_count,
+                             state.nonterms_count, state.rules, state.rules_count, state.msg, 0));
 
     return GrB_SUCCESS;
 }
@@ -106,8 +105,6 @@ static GrB_Info adapter_CFL_free_outputs(void) {
 // this should be called after all runs of the algorithm for the given config
 static GrB_Info adapter_CFL_cleanup(void) {
     TRY(adapter_CFL_cleanup_common(&state.adj_matrices, state.terms_count, (void **)&state.rules));
-    free(state.rule_table);
-    state.rule_table = NULL;
 
     return GrB_SUCCESS;
 }
